@@ -53,7 +53,7 @@ kbd{font-family:var(--display);font-size:11px;border:1px solid var(--line);borde
 
 <div id="menu">
   <div class="card">
-    <div class="ver">v1 · первая VR-сцена</div>
+    <div class="ver">v2 · свою установку можно расставить</div>
     <h1>Живой <span>барабанщик</span> VR</h1>
     <p>Садись на стул, бери контроллеры. Барабаны стоят вокруг тебя и звучат <strong>только от твоих ударов</strong>.</p>
 
@@ -80,11 +80,14 @@ kbd{font-family:var(--display);font-size:11px;border:1px solid var(--line);borde
     <details>
       <summary>Как играть</summary>
       <ul>
-        <li><strong>В VR:</strong> бей палочками по барабанам. Курок = педаль бочки. Кнопка хвата (сбоку) = подогнать установку под твои руки.</li>
+        <li><strong>В VR:</strong> бей палочками по барабанам. Курок = педаль бочки.</li>
+        <li><strong>Расстановка:</strong> поднеси палочку к барабану, зажми <strong>хват</strong> (кнопка сбоку) и тащи куда удобно. Хват в пустом месте двигает всю установку. Расстановка запоминается.</li>
+        <li><strong>Ножная педаль:</strong> подключи к Quest Bluetooth-клавиатуру или педаль-кнопку. Клавиши <kbd>J</kbd>, <kbd>B</kbd>, <kbd>Enter</kbd> и <kbd>Пробел</kbd> во время песни бьют бочку.</li>
         <li>Чтобы начать песню, ударь по <strong>тарелке</strong> справа сверху.</li>
         <li><strong>На ПК:</strong> <kbd>D</kbd> хэт, <kbd>F</kbd> малый, <kbd>G</kbd> том, <kbd>J</kbd> бочка, <kbd>K</kbd> тарелка, <kbd>Пробел</kbd> старт. Можно кликать мышкой по барабанам.</li>
       </ul>
     </details>
+    <button class="btn pc" id="resetLayout" style="flex:none">Сбросить расстановку барабанов</button>
   </div>
 </div>
 
@@ -255,8 +258,15 @@ DRUMS.forEach(d=>{
   stand.userData.stand=true;g.add(stand);
   d.group=g;d.head=head;d.rim=rim;d.flash=0;d.stand=stand;
 });
-function updateStands(){DRUMS.forEach(d=>{const wy=kit.position.y+d.pos[1];d.stand.scale.y=Math.max(.05,wy-.02);d.stand.position.y=-(wy)/2-.02})}
-updateStands();
+function updateStands(){DRUMS.forEach(d=>{const wy=kit.position.y+d.group.position.y;d.stand.scale.y=Math.max(.05,wy-.02);d.stand.position.y=-(wy)/2-.02})}
+
+// ---------- Расстановка запоминается в очках ----------
+// Хранится в браузере Quest: закрыл игру, открыл снова — барабаны стоят там же.
+const LAYOUT_KEY='vrdrums-layout-v2';
+function saveLayout(){try{localStorage.setItem(LAYOUT_KEY,JSON.stringify({kit:kit.position.toArray(),drums:Object.fromEntries(DRUMS.map(d=>[d.id,d.group.position.toArray()]))}))}catch(e){}}
+function loadLayout(){try{const L=JSON.parse(localStorage.getItem(LAYOUT_KEY)||'null');if(!L)return;kit.position.fromArray(L.kit);DRUMS.forEach(d=>{if(L.drums[d.id])d.group.position.fromArray(L.drums[d.id])})}catch(e){}}
+function resetLayout(){kit.position.set(0,.68,0);DRUMS.forEach(d=>d.group.position.set(...d.pos));updateStands();try{localStorage.removeItem(LAYOUT_KEY)}catch(e){}}
+loadLayout();updateStands();
 
 // табло очков: картинка на canvas, висит над установкой
 const boardCv=document.createElement('canvas');boardCv.width=1024;boardCv.height=320;
@@ -289,22 +299,43 @@ for(let i=0;i<2;i++){
   body.rotation.x=-Math.PI/2;body.position.z=-.18;stick.add(body);
   const tipM=new THREE.Mesh(new THREE.SphereGeometry(.014,12,8),new THREE.MeshBasicMaterial({color:0xffffff}));tipM.position.z=-.38;stick.add(tipM);
   grip.add(stick);
-  const s={grip,ctrl,tip:tipM,prev:new THREE.Vector3(),cur:new THREE.Vector3(),ready:false,cool:{},gamepad:null,hand:''};
+  const s={grip,ctrl,tip:tipM,prev:new THREE.Vector3(),cur:new THREE.Vector3(),ready:false,cool:{},gamepad:null,hand:'',held:null,grabOff:new THREE.Vector3()};
   ctrl.addEventListener('connected',e=>{s.gamepad=e.data.gamepad;s.hand=e.data.handedness});
   ctrl.addEventListener('disconnected',()=>{s.gamepad=null});
   ctrl.addEventListener('selectstart',()=>hit(DRUMS[3],1,s)); // курок = педаль бочки
-  ctrl.addEventListener('squeezestart',()=>calibrate(s));       // хват = подогнать установку
+  ctrl.addEventListener('squeezestart',()=>grabStart(s));       // хват = взять барабан (или всю установку)
+  ctrl.addEventListener('squeezeend',()=>grabEnd(s));
   sticks.push(s);
 }
 function buzz(s,v){try{s.gamepad?.hapticActuators?.[0]?.pulse(.25+.6*v,28)}catch(e){}}
 
-// Подгонка: малый барабан встаёт чуть ниже руки и прямо перед игроком
-function calibrate(s){
-  const p=new THREE.Vector3();s.tip.getWorldPosition(p);
-  const head=new THREE.Vector3();renderer.xr.getCamera().getWorldPosition(head);
-  kit.position.set(head.x+.1,p.y-.04,head.z);
-  updateStands();buzz(s,.6);
-  if(!game.running)drawBoard('Установка подогнана','ударь по тарелке, чтобы начать');
+// ---------- Перестановка барабанов ----------
+// Хват рядом с барабаном (до 25 см от кончика палочки) берёт этот барабан, он плавно едет за рукой.
+// Хват в пустоте берёт всю установку целиком. Никаких телепортов: всё двигается вместе с рукой.
+const GRAB_R=.25,_w=new THREE.Vector3(),_k=new THREE.Vector3();
+function nearestDrum(p){let best=null,bd=GRAB_R;for(const d of DRUMS){d.group.getWorldPosition(_w);const dist=_w.distanceTo(p);if(dist<bd){bd=dist;best=d}}return best}
+function grabStart(s){
+  s.tip.getWorldPosition(_k);
+  const d=nearestDrum(_k);
+  if(d){
+    if(sticks.some(o=>o!==s&&o.held===d))return; // этот барабан уже держит другая рука
+    s.held=d;d.group.getWorldPosition(_w);s.grabOff.subVectors(_w,_k);
+  }else{s.held='kit';s.grabOff.subVectors(kit.position,_k)}
+  buzz(s,.5);
+  if(!game.running)drawBoard(d?'Двигаешь: '+d.name.toLowerCase():'Двигаешь всю установку','отпусти хват, чтобы поставить');
+}
+function grabEnd(s){
+  if(!s.held)return;s.held=null;saveLayout();buzz(s,.3);
+  if(!game.running)drawBoard('Ударь по тарелке','чтобы начать песню');
+}
+function updateGrabs(){
+  for(const s of sticks){
+    if(!s.held)continue;
+    s.tip.getWorldPosition(_k);_w.addVectors(_k,s.grabOff);
+    if(s.held==='kit'){kit.position.copy(_w);kit.position.y=Math.max(.3,kit.position.y)}
+    else{kit.worldToLocal(_w);_w.y=Math.max(.3-kit.position.y,_w.y);s.held.group.position.copy(_w);s.held.flash=Math.max(s.held.flash,.35)}
+    updateStands();
+  }
 }
 
 // ---------- Игра ----------
@@ -364,6 +395,8 @@ function checkSticks(dt){
     if(s.ready&&dt>0){
       const vy=(s.cur.y-s.prev.y)/dt;
       for(const d of DRUMS){
+        if(s.held)break; // пока рука переставляет барабан, она не играет
+        if(sticks.some(o=>o.held===d))continue;
         d.head.getWorldPosition(tmp);
         const was=s.prev.y-tmp.y,is=s.cur.y-tmp.y;
         const dx=s.cur.x-tmp.x,dz=s.cur.z-tmp.z;
@@ -379,11 +412,27 @@ function checkSticks(dt){
 
 // ---------- ПК-режим ----------
 const keyMap={};DRUMS.forEach(d=>keyMap[d.key]=d);Object.assign(keyMap,{'в':DRUMS[0],'а':DRUMS[1],'п':DRUMS[2],'о':DRUMS[3],'л':DRUMS[4]});
+// Педаль: любая Bluetooth-клавиатура или ножная кнопка-«клавиатура», подключённая к Quest или ПК.
+const PEDAL_KEYS=new Set(['b','и','enter']);
 addEventListener('keydown',e=>{
-  if(!$('menu').hidden)return;
-  if(e.code==='Space'){e.preventDefault();if(!game.running)startSong();return}
-  if(e.repeat)return;const d=keyMap[e.key.toLowerCase()];if(d){e.preventDefault();hit(d,.85)}
+  if(!$('menu').hidden&&!renderer.xr.isPresenting)return;
+  if(e.repeat)return;
+  const k=e.key.toLowerCase();
+  if(e.code==='Space'){e.preventDefault();if(!game.running)startSong();else hit(DRUMS[3],1);return}
+  if(PEDAL_KEYS.has(k)){e.preventDefault();hit(DRUMS[3],1);return}
+  const d=keyMap[k];if(d){e.preventDefault();hit(d,.85)}
 });
+// Педаль-геймпад: любая кнопка обычного (не VR) геймпада тоже бьёт бочку
+const padDown={};
+function pollPedal(){
+  const pads=navigator.getGamepads?navigator.getGamepads():[];
+  for(const gp of pads){
+    if(!gp||gp.mapping==='xr-standard'||/oculus|meta|quest|openxr/i.test(gp.id))continue;
+    const any=gp.buttons.some(b=>b.pressed);
+    if(any&&!padDown[gp.index])hit(DRUMS[3],1);
+    padDown[gp.index]=any;
+  }
+}
 const ray=new THREE.Raycaster(),mouse=new THREE.Vector2();
 renderer.domElement.addEventListener('pointerdown',e=>{
   if(renderer.xr.isPresenting)return;
@@ -395,7 +444,8 @@ renderer.domElement.addEventListener('pointerdown',e=>{
 const clock=new THREE.Clock();
 renderer.setAnimationLoop(()=>{
   const dt=clock.getDelta();
-  if(renderer.xr.isPresenting)checkSticks(dt);
+  if(renderer.xr.isPresenting){updateGrabs();checkSticks(dt)}
+  pollPedal();
   DRUMS.forEach(d=>{d.head.material.emissiveIntensity=.15+1.6*d.flash;d.group.scale.setScalar(1+.04*d.flash);d.flash*=.85});
   if(game.running){
     const t=now();
@@ -407,7 +457,7 @@ renderer.setAnimationLoop(()=>{
       if(p>1.25||(n.miss&&p>1.15)){freeNote(n);continue}
       if(!n.mesh)n.mesh=noteMesh(n.d.col);
       // нота летит издалека прямо в центр своего барабана
-      const [x,y,z]=n.d.pos,k=Math.min(p,1.25);
+      const {x,y,z}=n.d.group.position,k=Math.min(p,1.25);
       n.mesh.position.set(x,y+.02+.35*(1-k),z-2.8*(1-k));
       n.mesh.material.opacity=n.miss?.25:1;
       n.mesh.scale.setScalar(.6+.4*Math.min(1,k));
@@ -423,6 +473,7 @@ function hud(){
   $('hud').hidden=$('menu').hidden;
   $('hud').innerHTML=game.running?`Очки ${game.score.toLocaleString('ru')} · комбо ${game.combo}`:'<kbd>Пробел</kbd> старт · <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>J</kbd> <kbd>K</kbd> удары';
 }
+$('resetLayout').onclick=()=>{resetLayout();$('resetLayout').textContent='Расстановка сброшена'};
 $('enterPC').onclick=()=>{initAudio();ac.resume();$('menu').hidden=true;$('back').hidden=false;hud()};
 $('back').onclick=()=>{stopSong();drawBoard('Ударь по тарелке','чтобы начать песню');$('menu').hidden=false;$('back').hidden=true;$('hud').hidden=true};
 
@@ -442,7 +493,7 @@ $('enterVR').onclick=async()=>{
   try{
     xrSession=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});
     await renderer.xr.setSession(xrSession);$('menu').hidden=true;$('hud').hidden=true;
-    drawBoard('Нажми хват','чтобы подогнать барабаны под руки');
+    drawBoard('Хват у барабана — переставить','хват в пустоте — вся установка');
     xrSession.addEventListener('end',()=>{xrSession=null;stopSong();$('menu').hidden=false;drawBoard('Ударь по тарелке','чтобы начать песню')});
   }catch(e){$('status').className='warn';$('status').textContent='Не удалось войти в VR: '+e.message}
 };

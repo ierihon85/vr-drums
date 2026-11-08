@@ -1,0 +1,449 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Живой барабанщик VR</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800&family=Golos+Text:wght@400;600&display=swap">
+<style>
+/* Layout: full-screen 3D stage; a start card floats over it until the player enters VR or PC mode. Single dark club look on purpose. */
+:root{
+  --stage:#0f0d17; --stage-2:#1a1626; --line:#2e2840; --ink:#f3eee4; --muted:#9a91ad;
+  --hat:#e8b84a; --snare:#f3eee4; --kick:#e2483d; --crash:#5cc8d6; --tom:#a57be0;
+  --display:"Unbounded","Arial Black",system-ui,sans-serif;
+  --body:"Golos Text",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--stage);color:var(--ink);font-family:var(--body);font-size:15px;overflow:hidden}
+#stage{position:fixed;inset:0}
+#stage canvas{display:block;width:100%;height:100%}
+#menu{position:fixed;inset:0;z-index:5;display:flex;align-items:safe center;justify-content:center;overflow-y:auto;
+  background:rgba(15,13,23,.78);padding-block:24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.card{width:100%;max-width:460px;display:flex;flex-direction:column;gap:16px;margin:auto 0}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(22px,5vw,30px);margin:0;line-height:1.1;text-wrap:balance}
+h1 span{color:var(--kick)}
+.ver{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+p{margin:0;line-height:1.5;color:var(--muted)}
+p strong{color:var(--ink);font-weight:600}
+fieldset{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0;display:flex;flex-direction:column;gap:10px}
+legend{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:0 6px}
+label.opt{display:flex;gap:10px;align-items:center;cursor:pointer}
+input[type=file]{color:var(--muted);font:inherit;font-size:13px;max-width:100%}
+.seg{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;align-self:flex-start}
+.seg button{background:none;border:0;color:var(--muted);font:inherit;font-size:13px;padding:8px 14px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--line);color:var(--ink)}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.btn{border:0;border-radius:999px;font-family:var(--display);font-weight:800;font-size:15px;padding:14px 20px;cursor:pointer;flex:1;min-width:160px}
+.btn.vr{background:var(--kick);color:#fff}
+.btn.pc{background:var(--line);color:var(--ink)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:2px solid var(--crash);outline-offset:2px}
+#status{font-size:13px;line-height:1.45}
+#status.warn{color:var(--hat)}
+#status.ok{color:var(--crash)}
+details{font-size:13px;color:var(--muted)}
+details summary{cursor:pointer;color:var(--ink)}
+details ul{margin:8px 0 0;padding-left:18px;line-height:1.6}
+kbd{font-family:var(--display);font-size:11px;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink)}
+#hud{position:fixed;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:4;font-size:12px;color:var(--muted);line-height:1.5}
+#back{position:fixed;right:max(16px,env(safe-area-inset-right,0px));top:calc(14px + env(safe-area-inset-top,0px));z-index:4;background:var(--line);color:var(--ink);border:0;border-radius:999px;font:inherit;font-size:13px;padding:8px 14px;cursor:pointer}
+</style>
+
+<div id="stage"></div>
+
+<div id="menu">
+  <div class="card">
+    <div class="ver">v1 · первая VR-сцена</div>
+    <h1>Живой <span>барабанщик</span> VR</h1>
+    <p>Садись на стул, бери контроллеры. Барабаны стоят вокруг тебя и звучат <strong>только от твоих ударов</strong>.</p>
+
+    <fieldset>
+      <legend>Песня</legend>
+      <label class="opt"><input type="radio" name="song" id="songBuiltin" value="builtin" checked> «Неон» — встроенная мелодия</label>
+      <label class="opt"><input type="radio" name="song" id="songFile" value="file"> Своя песня (mp3)</label>
+      <input type="file" id="file" accept="audio/*" hidden>
+      <p id="fileInfo" hidden></p>
+    </fieldset>
+
+    <div class="seg" role="group" aria-label="Сложность">
+      <button id="d0" aria-pressed="false">Легко</button>
+      <button id="d1" aria-pressed="true">Норм</button>
+      <button id="d2" aria-pressed="false">Сложно</button>
+    </div>
+
+    <div class="row">
+      <button class="btn vr" id="enterVR" disabled>Войти в VR</button>
+      <button class="btn pc" id="enterPC">Играть на ПК</button>
+    </div>
+    <div id="status">Проверяю, есть ли VR…</div>
+
+    <details>
+      <summary>Как играть</summary>
+      <ul>
+        <li><strong>В VR:</strong> бей палочками по барабанам. Курок = педаль бочки. Кнопка хвата (сбоку) = подогнать установку под твои руки.</li>
+        <li>Чтобы начать песню, ударь по <strong>тарелке</strong> справа сверху.</li>
+        <li><strong>На ПК:</strong> <kbd>D</kbd> хэт, <kbd>F</kbd> малый, <kbd>G</kbd> том, <kbd>J</kbd> бочка, <kbd>K</kbd> тарелка, <kbd>Пробел</kbd> старт. Можно кликать мышкой по барабанам.</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<div id="hud" hidden></div>
+<button id="back" hidden>Меню</button>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const $=id=>document.getElementById(id);
+const css=getComputedStyle(document.documentElement);
+const C=n=>new THREE.Color(css.getPropertyValue(n).trim());
+
+// ---------- Барабаны ----------
+// Позиции заданы относительно малого барабана: так установку легко сдвинуть целиком под рост игрока.
+const DRUMS=[
+  {id:'hat',  name:'Хэт',     col:C('--hat'),  pos:[-0.44,0.10,-0.30], r:0.16, key:'d'},
+  {id:'snare',name:'Малый',   col:C('--snare'),pos:[-0.10,0.00,-0.40], r:0.18, key:'f'},
+  {id:'tom',  name:'Том',     col:C('--tom'),  pos:[ 0.20,0.12,-0.50], r:0.14, key:'g'},
+  {id:'kick', name:'Бочка',   col:C('--kick'), pos:[ 0.44,-0.02,-0.30],r:0.19, key:'j'},
+  {id:'crash',name:'Тарелка', col:C('--crash'),pos:[ 0.46,0.38,-0.58], r:0.23, key:'k'},
+];
+const LANE={hat:0,snare:1,kick:3,crash:4}; // какие барабаны получают летящие ноты
+
+// ---------- Звук ----------
+let ac,master,noiseBuf;
+function initAudio(){
+  if(ac)return;
+  ac=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'}); // минимальная задержка — для барабанов это главное
+  const comp=ac.createDynamicsCompressor();comp.threshold.value=-10;comp.connect(ac.destination);
+  master=ac.createGain();master.gain.value=.9;master.connect(comp);
+  noiseBuf=ac.createBuffer(1,ac.sampleRate*1.5,ac.sampleRate);
+  const d=noiseBuf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+}
+function env(n,t,p,dur){n.gain.setValueAtTime(p,t);n.gain.exponentialRampToValueAtTime(.001,t+dur)}
+function noise(t,type,f,p,dur,out=master){const s=ac.createBufferSource();s.buffer=noiseBuf;const fl=ac.createBiquadFilter();fl.type=type;fl.frequency.value=f;const g=ac.createGain();env(g,t,p,dur);s.connect(fl).connect(g).connect(out);s.start(t);s.stop(t+dur+.05)}
+function tone(t,type,f0,f1,p,dur){const o=ac.createOscillator(),g=ac.createGain();o.type=type;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+dur*.4);env(g,t,p,dur);o.connect(g).connect(master);o.start(t);o.stop(t+dur+.02)}
+// vel 0..1 — сила удара: чем резче махнул, тем громче
+function playDrum(id,vel=1){
+  const t=ac.currentTime,v=.35+.65*vel;
+  if(id==='kick')tone(t,'sine',150,42,1*v,.38);
+  if(id==='snare'){noise(t,'highpass',1300,.6*v,.18);tone(t,'triangle',190,170,.45*v,.1)}
+  if(id==='hat')noise(t,'highpass',7500,.3*v,.05);
+  if(id==='tom')tone(t,'sine',220,110,.8*v,.3);
+  if(id==='crash')noise(t,'highpass',4200,.35*v,1.3);
+}
+
+// ---------- Фон «Неон» (из демки) ----------
+const BPM=108,BEAT=60/BPM,BARS=24;
+function scheduleBuiltin(t0){
+  const bus=ac.createGain();bus.gain.value=.55;bus.connect(master);
+  const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=900;lp.connect(bus);
+  const prog=[[110,[220,261.6,329.6]],[87.3,[174.6,220,261.6]],[130.8,[261.6,329.6,392]],[98,[196,246.9,293.7]]];
+  for(let b=1;b<=BARS;b++){
+    const[root,ch]=prog[(b-1)%4],bt=t0+b*4*BEAT;
+    for(let e=0;e<8;e++){const t=bt+e*BEAT/2,o=ac.createOscillator(),g=ac.createGain();o.type='sawtooth';o.frequency.value=e===6?root*1.5:root;env(g,t,.22,BEAT*.45);o.connect(g).connect(lp);o.start(t);o.stop(t+BEAT/2)}
+    ch.forEach(f=>{const o=ac.createOscillator(),g=ac.createGain();o.type='triangle';o.frequency.value=f;g.gain.setValueAtTime(.0001,bt);g.gain.linearRampToValueAtTime(.05,bt+.08);g.gain.setValueAtTime(.05,bt+4*BEAT-.1);g.gain.linearRampToValueAtTime(.0001,bt+4*BEAT);o.connect(g).connect(bus);o.start(bt);o.stop(bt+4*BEAT+.02)});
+  }
+  for(let i=0;i<4;i++){const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=i?1300:1800;env(g,t0+i*BEAT,.15,.04);o.connect(g).connect(master);o.start(t0+i*BEAT);o.stop(t0+i*BEAT+.06)}
+  return {stop:()=>{bus.disconnect()},end:(BARS+1)*4*BEAT};
+}
+function chartBuiltin(d){
+  const n=[];const add=(id,bar,e)=>n.push({id,t:(bar*4+e/2)*BEAT});
+  for(let b=1;b<=BARS;b++){
+    [0,4].forEach(e=>add('kick',b,e)); if(d>0&&b%2===0)add('kick',b,5);
+    [2,6].forEach(e=>add('snare',b,e));
+    if(d===1)[1,3,5,7].forEach(e=>add('hat',b,e));
+    if(d===2)[0,1,2,3,4,5,6,7].forEach(e=>add('hat',b,e));
+    if(b%4===1)add('crash',b,0); if(d===2&&b%4===0)add('crash',b,7);
+  }
+  return n.sort((a,b)=>a.t-b.t);
+}
+
+// ---------- Своя песня: ноты расставляются автоматически ----------
+// Песню прогоняем через три фильтра (низ = бочка, середина = малый, верх = хэт) и ищем резкие всплески громкости.
+let fileBuffer=null,fileName='';
+async function bandEnergy(buf,type,freq,q){
+  const oc=new OfflineAudioContext(1,buf.length,buf.sampleRate);
+  const s=oc.createBufferSource();s.buffer=buf;const f=oc.createBiquadFilter();f.type=type;f.frequency.value=freq;if(q)f.Q.value=q;
+  s.connect(f).connect(oc.destination);s.start();
+  const r=await oc.startRendering(),d=r.getChannelData(0),hop=512,out=new Float32Array(Math.floor(d.length/hop));
+  for(let i=0;i<out.length;i++){let s2=0;for(let j=0;j<hop;j++){const v=d[i*hop+j];s2+=v*v}out[i]=Math.sqrt(s2/hop)}
+  return {e:out,dt:hop/buf.sampleRate};
+}
+function pickOnsets({e,dt},minGap,sens){
+  const flux=new Float32Array(e.length);for(let i=1;i<e.length;i++)flux[i]=Math.max(0,e[i]-e[i-1]);
+  const W=Math.round(.6/dt),res=[];let last=-9;
+  for(let i=1;i<flux.length-1;i++){
+    let sum=0,c=0;for(let j=Math.max(0,i-W);j<Math.min(flux.length,i+W);j++){sum+=flux[j];c++}
+    const thr=sum/c*sens+1e-4,t=i*dt;
+    if(flux[i]>thr&&flux[i]>=flux[i-1]&&flux[i]>=flux[i+1]&&t-last>=minGap){res.push(t);last=t}
+  }
+  return res;
+}
+async function chartFromFile(buf,d){
+  const [lo,mid,hi]=await Promise.all([bandEnergy(buf,'lowpass',120),bandEnergy(buf,'bandpass',1800,.9),bandEnergy(buf,'highpass',8000)]);
+  const gap=[.4,.24,.14][d],sens=[3.2,2.6,2.1][d],n=[];
+  pickOnsets(lo,gap,sens).forEach(t=>n.push({id:'kick',t}));
+  pickOnsets(mid,gap,sens).forEach(t=>n.push({id:'snare',t}));
+  if(d>0)pickOnsets(hi,gap,sens+.4).forEach(t=>n.push({id:'hat',t}));
+  // не даём двум нотам стоять почти в одно время на разных руках — иначе неиграбельно
+  // в каждом «аккорде» оставляем максимум две ноты, бочка важнее всех, потом малый, потом хэт
+  const pri={kick:0,snare:1,hat:2};n.sort((a,b)=>a.t-b.t);const out=[];
+  for(let i=0;i<n.length;){
+    let j=i;while(j<n.length&&n[j].t-n[i].t<.07)j++;
+    const grp=n.slice(i,j).sort((a,b)=>pri[a.id]-pri[b.id]),seen=new Set();
+    for(const x of grp){if(seen.has(x.id)||seen.size>=2)continue;seen.add(x.id);out.push({id:x.id,t:n[i].t})}
+    i=j;
+  }
+  return out;
+}
+$('songFile').onchange=()=>{$('file').hidden=false;$('file').click()};
+$('songBuiltin').onchange=()=>{$('file').hidden=true};
+$('file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  initAudio();$('fileInfo').hidden=false;$('fileInfo').textContent='Загружаю «'+f.name+'»…';
+  try{fileBuffer=await ac.decodeAudioData(await f.arrayBuffer());fileName=f.name.replace(/\.[^.]+$/,'');
+    $('fileInfo').textContent='Готово: «'+fileName+'», '+Math.round(fileBuffer.duration)+' сек. Ноты расставятся сами.';}
+  catch(err){fileBuffer=null;$('fileInfo').textContent='Не получилось прочитать файл. Попробуй mp3 или wav.'}
+};
+
+let diff=1;
+['d0','d1','d2'].forEach((id,i)=>$(id).onclick=()=>{diff=i;['d0','d1','d2'].forEach((x,j)=>$(x).setAttribute('aria-pressed',i===j))});
+
+// ---------- 3D-сцена ----------
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(2,devicePixelRatio));
+renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;
+renderer.xr.setReferenceSpaceType('local-floor'); // пол в VR = настоящий пол комнаты
+$('stage').appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0f0d17);
+scene.fog=new THREE.Fog(0x0f0d17,4,14);
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.02,50);
+camera.position.set(0,1.55,0.95);camera.lookAt(0,0.82,-0.7); // на ПК смотрим чуть сзади-сверху, чтобы видеть всю установку и табло
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+scene.add(new THREE.HemisphereLight(0x9a91ad,0x0f0d17,.7));
+const spot=new THREE.SpotLight(0xffe6c8,30,8,.6,.5);spot.position.set(0,3.2,.6);spot.target.position.set(0,.6,-.4);scene.add(spot,spot.target);
+
+// пол-сцена: круглый подиум + сетка
+const floor=new THREE.Mesh(new THREE.CircleGeometry(2.2,64),new THREE.MeshStandardMaterial({color:0x1a1626,roughness:.9}));
+floor.rotation.x=-Math.PI/2;scene.add(floor);
+const ring=new THREE.Mesh(new THREE.RingGeometry(2.15,2.2,96),new THREE.MeshBasicMaterial({color:C('--kick')}));
+ring.rotation.x=-Math.PI/2;ring.position.y=.002;scene.add(ring);
+const grid=new THREE.GridHelper(30,60,0x2e2840,0x1d1929);grid.position.y=-.01;scene.add(grid);
+
+// установка
+const kit=new THREE.Group();kit.position.set(0,.68,0);scene.add(kit);
+DRUMS.forEach(d=>{
+  const g=new THREE.Group();g.position.set(...d.pos);kit.add(g);
+  const isCym=d.id==='crash'||d.id==='hat';
+  const depth=isCym?.012:.14;
+  const shell=new THREE.Mesh(new THREE.CylinderGeometry(d.r,d.r*(isCym?.4:1),depth,40,1,!isCym),
+    new THREE.MeshStandardMaterial({color:isCym?0x6b5a2e:0x241f33,metalness:isCym?.8:.2,roughness:.4,side:THREE.DoubleSide}));
+  shell.position.y=-depth/2;g.add(shell);
+  const head=new THREE.Mesh(new THREE.CircleGeometry(d.r,40),new THREE.MeshStandardMaterial({color:d.col,emissive:d.col,emissiveIntensity:.15,roughness:.6,transparent:true,opacity:isCym?.55:.9}));
+  head.rotation.x=-Math.PI/2;head.position.y=.001;head.userData.drum=d;g.add(head);
+  const rim=new THREE.Mesh(new THREE.TorusGeometry(d.r,.008,8,48),new THREE.MeshBasicMaterial({color:d.col}));
+  rim.rotation.x=-Math.PI/2;g.add(rim);
+  // стойка до пола
+  const stand=new THREE.Mesh(new THREE.CylinderGeometry(.01,.01,1,8),new THREE.MeshStandardMaterial({color:0x3a3450,metalness:.8,roughness:.3}));
+  stand.userData.stand=true;g.add(stand);
+  d.group=g;d.head=head;d.rim=rim;d.flash=0;d.stand=stand;
+});
+function updateStands(){DRUMS.forEach(d=>{const wy=kit.position.y+d.pos[1];d.stand.scale.y=Math.max(.05,wy-.02);d.stand.position.y=-(wy)/2-.02})}
+updateStands();
+
+// табло очков: картинка на canvas, висит над установкой
+const boardCv=document.createElement('canvas');boardCv.width=1024;boardCv.height=320;
+const boardCtx=boardCv.getContext('2d'),boardTex=new THREE.CanvasTexture(boardCv);boardTex.colorSpace=THREE.SRGBColorSpace;
+const board=new THREE.Mesh(new THREE.PlaneGeometry(1.1,.344),new THREE.MeshBasicMaterial({map:boardTex,transparent:true}));
+board.position.set(0,.75,-1.25);kit.add(board);
+function drawBoard(big,small){
+  const g=boardCtx;g.clearRect(0,0,1024,320);
+  g.fillStyle='rgba(26,22,38,.85)';g.beginPath();g.roundRect(8,8,1008,304,36);g.fill();
+  g.strokeStyle='#2e2840';g.lineWidth=4;g.stroke();
+  g.fillStyle='#f3eee4';g.textAlign='center';g.font='800 92px Unbounded, Arial Black, sans-serif';g.fillText(big,512,150);
+  g.fillStyle='#9a91ad';g.font='600 46px Golos Text, system-ui, sans-serif';g.fillText(small,512,240);
+  boardTex.needsUpdate=true;
+}
+drawBoard('Ударь по тарелке','чтобы начать песню');
+
+// ноты
+const noteGeo=new THREE.SphereGeometry(.045,20,14);
+const notePool=[];
+function noteMesh(col){const m=notePool.pop()||new THREE.Mesh(noteGeo,new THREE.MeshBasicMaterial({transparent:true}));m.material.color.copy(col);m.material.opacity=1;m.visible=true;kit.add(m);return m}
+function freeNote(n){if(n.mesh){n.mesh.visible=false;kit.remove(n.mesh);notePool.push(n.mesh);n.mesh=null}}
+
+// ---------- Палочки на контроллерах ----------
+const sticks=[];
+for(let i=0;i<2;i++){
+  const grip=renderer.xr.getControllerGrip(i);scene.add(grip);
+  const ctrl=renderer.xr.getController(i);scene.add(ctrl);
+  const stick=new THREE.Group();stick.rotation.x=-.35; // палочка чуть вниз от руки, как держат настоящую
+  const body=new THREE.Mesh(new THREE.CylinderGeometry(.007,.011,.40,10),new THREE.MeshStandardMaterial({color:0xd9c6a0,roughness:.6}));
+  body.rotation.x=-Math.PI/2;body.position.z=-.18;stick.add(body);
+  const tipM=new THREE.Mesh(new THREE.SphereGeometry(.014,12,8),new THREE.MeshBasicMaterial({color:0xffffff}));tipM.position.z=-.38;stick.add(tipM);
+  grip.add(stick);
+  const s={grip,ctrl,tip:tipM,prev:new THREE.Vector3(),cur:new THREE.Vector3(),ready:false,cool:{},gamepad:null,hand:''};
+  ctrl.addEventListener('connected',e=>{s.gamepad=e.data.gamepad;s.hand=e.data.handedness});
+  ctrl.addEventListener('disconnected',()=>{s.gamepad=null});
+  ctrl.addEventListener('selectstart',()=>hit(DRUMS[3],1,s)); // курок = педаль бочки
+  ctrl.addEventListener('squeezestart',()=>calibrate(s));       // хват = подогнать установку
+  sticks.push(s);
+}
+function buzz(s,v){try{s.gamepad?.hapticActuators?.[0]?.pulse(.25+.6*v,28)}catch(e){}}
+
+// Подгонка: малый барабан встаёт чуть ниже руки и прямо перед игроком
+function calibrate(s){
+  const p=new THREE.Vector3();s.tip.getWorldPosition(p);
+  const head=new THREE.Vector3();renderer.xr.getCamera().getWorldPosition(head);
+  kit.position.set(head.x+.1,p.y-.04,head.z);
+  updateStands();buzz(s,.6);
+  if(!game.running)drawBoard('Установка подогнана','ударь по тарелке, чтобы начать');
+}
+
+// ---------- Игра ----------
+const LEAD=1.6,PERFECT=.06,GOOD=.13; // окна попадания в VR чуть шире, чем на клавиатуре
+const game={running:false,notes:[],t0:0,end:0,backing:null,score:0,combo:0,best:0,hits:0,judged:0,perfect:0};
+function now(){return ac?ac.currentTime-game.t0:0}
+
+async function startSong(){
+  if(game.running)return;
+  initAudio();if(ac.state!=='running')await ac.resume();
+  Object.assign(game,{score:0,combo:0,best:0,hits:0,judged:0,perfect:0});
+  game.notes.forEach(freeNote);
+  const useFile=$('songFile').checked&&fileBuffer;
+  let chart;
+  if(useFile){
+    drawBoard('Готовлю ноты…',fileName);
+    chart=await chartFromFile(fileBuffer,diff);
+    game.t0=ac.currentTime+2.2;
+    const src=ac.createBufferSource(),g=ac.createGain();g.gain.value=.8;src.buffer=fileBuffer;src.connect(g).connect(master);src.start(game.t0);
+    game.backing={stop:()=>{try{src.stop()}catch(e){}}};game.end=fileBuffer.duration+1;
+  }else{
+    chart=chartBuiltin(diff);game.t0=ac.currentTime+.5;
+    game.backing=scheduleBuiltin(game.t0);game.end=game.backing.end+.8;
+  }
+  game.notes=chart.map(n=>({...n,d:DRUMS.find(x=>x.id===n.id),hit:false,miss:false,mesh:null}));
+  game.running=true;drawScore();
+}
+function stopSong(){if(game.backing)game.backing.stop();game.running=false;game.notes.forEach(freeNote)}
+function finish(){
+  game.running=false;game.notes.forEach(freeNote);
+  const acc=game.judged?Math.round(game.hits/game.judged*100):0;
+  drawBoard(acc>=90?'Зал аплодирует!':acc>=70?'Хороший сет':'Нужна репетиция',
+    `${game.score.toLocaleString('ru')} очков · ${acc}% · комбо ${game.best}`);
+  hud();
+}
+function drawScore(){drawBoard(game.score.toLocaleString('ru'),`комбо ${game.combo} · точность ${game.judged?Math.round(game.hits/game.judged*100)+'%':'—'}`);hud()}
+
+function hit(d,vel,s){
+  if(!ac)initAudio();
+  playDrum(d.id,vel);d.flash=1;if(s)buzz(s,vel);
+  if(!game.running){if(d.id==='crash')startSong();return}
+  const t=now();let best=null,bd=9;
+  for(const n of game.notes){if(n.id!==d.id||n.hit||n.miss)continue;const dd=Math.abs(n.t-t);if(dd<bd){bd=dd;best=n}if(n.t-t>GOOD)break}
+  if(best&&bd<=GOOD){
+    best.hit=true;freeNote(best);game.judged++;game.hits++;game.combo++;game.best=Math.max(game.best,game.combo);
+    const p=bd<=PERFECT;if(p)game.perfect++;
+    game.score+=(p?300:100)*Math.min(4,1+Math.floor(game.combo/10));drawScore();
+  }
+}
+
+// попадание палочки: кончик сверху вошёл в «шкуру» барабана движением вниз
+const tmp=new THREE.Vector3();
+function checkSticks(dt){
+  for(const s of sticks){
+    if(!s.grip.visible)continue;
+    s.tip.getWorldPosition(s.cur);
+    if(s.ready&&dt>0){
+      const vy=(s.cur.y-s.prev.y)/dt;
+      for(const d of DRUMS){
+        d.head.getWorldPosition(tmp);
+        const was=s.prev.y-tmp.y,is=s.cur.y-tmp.y;
+        const dx=s.cur.x-tmp.x,dz=s.cur.z-tmp.z;
+        if(was>0&&is<=.01&&dx*dx+dz*dz<(d.r+.03)**2&&vy<-.35){
+          const k=d.id;if(performance.now()-(s.cool[k]||0)<70)continue;s.cool[k]=performance.now();
+          hit(d,Math.min(1,(-vy-.35)/3),s);
+        }
+      }
+    }
+    s.prev.copy(s.cur);s.ready=true;
+  }
+}
+
+// ---------- ПК-режим ----------
+const keyMap={};DRUMS.forEach(d=>keyMap[d.key]=d);Object.assign(keyMap,{'в':DRUMS[0],'а':DRUMS[1],'п':DRUMS[2],'о':DRUMS[3],'л':DRUMS[4]});
+addEventListener('keydown',e=>{
+  if(!$('menu').hidden)return;
+  if(e.code==='Space'){e.preventDefault();if(!game.running)startSong();return}
+  if(e.repeat)return;const d=keyMap[e.key.toLowerCase()];if(d){e.preventDefault();hit(d,.85)}
+});
+const ray=new THREE.Raycaster(),mouse=new THREE.Vector2();
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(renderer.xr.isPresenting)return;
+  mouse.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);ray.setFromCamera(mouse,camera);
+  const h=ray.intersectObjects(DRUMS.map(d=>d.head))[0];if(h)hit(h.object.userData.drum,.85);
+});
+
+// ---------- Цикл кадра ----------
+const clock=new THREE.Clock();
+renderer.setAnimationLoop(()=>{
+  const dt=clock.getDelta();
+  if(renderer.xr.isPresenting)checkSticks(dt);
+  DRUMS.forEach(d=>{d.head.material.emissiveIntensity=.15+1.6*d.flash;d.group.scale.setScalar(1+.04*d.flash);d.flash*=.85});
+  if(game.running){
+    const t=now();
+    for(const n of game.notes){
+      if(n.hit)continue;
+      if(!n.miss&&t>n.t+GOOD){n.miss=true;game.judged++;game.combo=0;drawScore()}
+      const p=1-(n.t-t)/LEAD;
+      if(p<0)break;
+      if(p>1.25||(n.miss&&p>1.15)){freeNote(n);continue}
+      if(!n.mesh)n.mesh=noteMesh(n.d.col);
+      // нота летит издалека прямо в центр своего барабана
+      const [x,y,z]=n.d.pos,k=Math.min(p,1.25);
+      n.mesh.position.set(x,y+.02+.35*(1-k),z-2.8*(1-k));
+      n.mesh.material.opacity=n.miss?.25:1;
+      n.mesh.scale.setScalar(.6+.4*Math.min(1,k));
+    }
+    if(t>game.end)finish();
+  }
+  renderer.render(scene,camera);
+});
+
+// ---------- Меню ----------
+function hud(){
+  if(renderer.xr.isPresenting){$('hud').hidden=true;return}
+  $('hud').hidden=$('menu').hidden;
+  $('hud').innerHTML=game.running?`Очки ${game.score.toLocaleString('ru')} · комбо ${game.combo}`:'<kbd>Пробел</kbd> старт · <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>J</kbd> <kbd>K</kbd> удары';
+}
+$('enterPC').onclick=()=>{initAudio();ac.resume();$('menu').hidden=true;$('back').hidden=false;hud()};
+$('back').onclick=()=>{stopSong();drawBoard('Ударь по тарелке','чтобы начать песню');$('menu').hidden=false;$('back').hidden=true;$('hud').hidden=true};
+
+let xrSession=null;
+async function checkXR(){
+  const st=$('status');
+  if(!('xr' in navigator)){st.className='warn';st.textContent='VR здесь недоступен. Открой эту страницу в браузере Quest по адресу с https:// — а пока можно поиграть на ПК.';return}
+  try{
+    const ok=await navigator.xr.isSessionSupported('immersive-vr');
+    if(ok){$('enterVR').disabled=false;st.className='ok';st.textContent='VR найден. Надень очки и жми «Войти в VR».'}
+    else{st.className='warn';st.textContent='Браузер не видит очки. Открой страницу прямо в Quest (браузер Meta). На ПК можно играть без VR.'}
+  }catch(e){st.className='warn';st.textContent='VR заблокирован на этом адресе. Нужна отдельная ссылка с https:// (например GitHub Pages). На ПК можно играть без VR.'}
+}
+checkXR();
+$('enterVR').onclick=async()=>{
+  initAudio();await ac.resume();
+  try{
+    xrSession=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});
+    await renderer.xr.setSession(xrSession);$('menu').hidden=true;$('hud').hidden=true;
+    drawBoard('Нажми хват','чтобы подогнать барабаны под руки');
+    xrSession.addEventListener('end',()=>{xrSession=null;stopSong();$('menu').hidden=false;drawBoard('Ударь по тарелке','чтобы начать песню')});
+  }catch(e){$('status').className='warn';$('status').textContent='Не удалось войти в VR: '+e.message}
+};
+</script>
